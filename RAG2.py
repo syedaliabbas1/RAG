@@ -1,0 +1,88 @@
+import os
+os.environ['USER_AGENT'] = 'myagent'
+from langchain_community.document_loaders import WebBaseLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import SKLearnVectorStore
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import ChatOllama
+from langchain.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+import os
+
+# Set USER_AGENT environment variable
+os.environ["USER_AGENT"] = "RAGApplication/1.0"
+
+# List of URLs to load documents from
+urls = [
+    "https://lilianweng.github.io/posts/2023-06-23-agent/",
+    "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
+    "https://lilianweng.github.io/posts/2023-10-25-adv-attack-llm/",
+]
+
+# Load documents from the URLs
+docs = [WebBaseLoader(url).load() for url in urls]
+docs_list = [item for sublist in docs for item in sublist]
+
+# Initialize a text splitter with specified chunk size and overlap
+text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+    chunk_size=250, chunk_overlap=20
+)
+
+# Split the documents into chunks
+doc_splits = text_splitter.split_documents(docs_list)
+
+# Initialize the embedding model
+embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+# Create embeddings for documents and store them in a vector store
+vectorstore = SKLearnVectorStore.from_documents(
+    documents=doc_splits,
+    embedding=embedding_model,
+)
+
+retriever = vectorstore.as_retriever(k=4)
+
+# Define the prompt template for the LLM
+prompt = PromptTemplate(
+    template="""You are an assistant for question-answering tasks.
+    Use the following documents to answer the question.
+    If you don't know the answer, just say that you don't know:
+    Question: {question}
+    Documents: {documents}
+    Answer:
+    """,
+    input_variables=["question", "documents"],
+)
+
+# Initialize the LLM with Llama 3.1 model
+llm = ChatOllama(
+    model="llama3.1",
+    temperature=0,
+)
+
+# Create a chain combining the prompt template and LLM
+rag_chain = prompt | llm | StrOutputParser()
+
+# Define the RAG application class
+class RAGApplication:
+    def __init__(self, retriever, rag_chain):
+        self.retriever = retriever
+        self.rag_chain = rag_chain
+
+    def run(self, question):
+        # Retrieve relevant documents
+        documents = self.retriever.invoke(question)
+        # Extract content from retrieved documents
+        doc_texts = "\\n".join([doc.page_content for doc in documents])
+        # Get the answer from the language model
+        answer = self.rag_chain.invoke({"question": question, "documents": doc_texts})
+        return answer
+
+# Initialize the RAG application
+rag_application = RAGApplication(retriever, rag_chain)
+
+# Example usage
+question = "what are the types of memory in a human brain"
+answer = rag_application.run(question)
+print("Question:", question)
+print("Answer:", answer)
